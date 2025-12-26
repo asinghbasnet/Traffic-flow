@@ -1,349 +1,322 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Traffic Flow Analysis Dashboard</title>
-
-    <!-- Tailwind (CDN) -->
-    <script src="https://cdn.tailwindcss.com"></script>
-
-    <!-- React 18 (UMD) -->
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-
-    <!-- Babel (compiles JSX in the browser) -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
-    <!-- Recharts (UMD bundle) -->
-    <script src="https://unpkg.com/recharts/umd/Recharts.min.js"></script>
-  </head>
-
-  <body class="bg-gray-50">
+    <script src="https://unpkg.com/recharts@2.5.0/dist/Recharts.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; padding: 0; }
+    </style>
+</head>
+<body>
     <div id="root"></div>
-
+    
     <script type="text/babel">
-      const { useMemo, useState } = React;
+        const { useState, useMemo } = React;
+        const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ScatterChart, Scatter } = Recharts;
 
-      const {
-        ResponsiveContainer,
-        LineChart,
-        Line,
-        XAxis,
-        YAxis,
-        CartesianGrid,
-        Tooltip,
-        Legend
-      } = Recharts;
-
-      // ---------------------------
-      // Traffic Flow Models
-      // ---------------------------
-      function greenshieldsSpeed(k, uf, kj) {
-        return uf * (1 - k / kj);
-      }
-      function greenshieldsFlow(k, uf, kj) {
-        return k * greenshieldsSpeed(k, uf, kj);
-      }
-
-      function greenbergSpeed(k, uf, kj) {
-        if (k <= 0) return NaN;
-        return uf * Math.log(kj / k);
-      }
-      function greenbergFlow(k, uf, kj) {
-        const u = greenbergSpeed(k, uf, kj);
-        return k * u;
-      }
-
-      function underwoodSpeed(k, uf, ko) {
-        return uf * Math.exp(-k / ko);
-      }
-      function underwoodFlow(k, uf, ko) {
-        const u = underwoodSpeed(k, uf, ko);
-        return k * u;
-      }
-
-      function getLOS(flow, capacity) {
-        if (!capacity || capacity <= 0) return { level: "-", desc: "N/A" };
-        const vByC = flow / capacity;
-
-        if (vByC <= 0.35) return { level: "A", desc: "Free Flow", badge: "bg-green-600" };
-        if (vByC <= 0.54) return { level: "B", desc: "Reasonably Free Flow", badge: "bg-green-500" };
-        if (vByC <= 0.77) return { level: "C", desc: "Stable Flow", badge: "bg-yellow-500" };
-        if (vByC <= 0.93) return { level: "D", desc: "Approaching Unstable", badge: "bg-orange-500" };
-        if (vByC <= 1.0)  return { level: "E", desc: "Unstable Flow", badge: "bg-red-500" };
-        return { level: "F", desc: "Forced Flow", badge: "bg-red-700" };
-      }
-
-      function TrafficAnalysisDashboard() {
-        const [selectedModel, setSelectedModel] = useState("greenshields");
-
-        // Sliders (you can change these defaults)
-        const [freeFlowSpeed, setFreeFlowSpeed] = useState(65);  // mph
-        const [jamDensity, setJamDensity] = useState(180);       // veh/mi
-
-        // Underwood needs ko. We'll use ko = kj/2 by default.
-        const ko = useMemo(() => jamDensity / 2, [jamDensity]);
-
-        const modelMeta = useMemo(() => ({
-          greenshields: {
-            name: "Greenshields Model",
-            speed: (k) => greenshieldsSpeed(k, freeFlowSpeed, jamDensity),
-            flow:  (k) => greenshieldsFlow(k, freeFlowSpeed, jamDensity),
-            xLabel: "Density (veh/mi)",
-          },
-          greenberg: {
-            name: "Greenberg Model",
-            speed: (k) => greenbergSpeed(k, freeFlowSpeed, jamDensity),
-            flow:  (k) => greenbergFlow(k, freeFlowSpeed, jamDensity),
-            xLabel: "Density (veh/mi)",
-          },
-          underwood: {
-            name: "Underwood Model",
-            speed: (k) => underwoodSpeed(k, freeFlowSpeed, ko),
-            flow:  (k) => underwoodFlow(k, freeFlowSpeed, ko),
-            xLabel: "Density (veh/mi)",
-          }
-        }), [freeFlowSpeed, jamDensity, ko]);
-
-        const activeModel = modelMeta[selectedModel];
-
-        // Generate curve data
-        const trafficData = useMemo(() => {
-          const data = [];
-          const steps = 120;
-          const kMin = selectedModel === "greenberg" ? 1 : 0; // avoid ln(0)
-          const kMax = jamDensity;
-          const step = (kMax - kMin) / steps;
-
-          for (let i = 0; i <= steps; i++) {
-            const k = kMin + i * step;
-            const u = activeModel.speed(k);
-            const q = activeModel.flow(k);
-
-            if (Number.isFinite(u) && Number.isFinite(q) && u >= 0 && q >= 0) {
-              data.push({
-                density: Math.round(k * 10) / 10,
-                speed: Math.round(u * 10) / 10,
-                flow: Math.round(q),
-              });
-            }
-          }
-          return data;
-        }, [activeModel, selectedModel, jamDensity]);
-
-        // Capacity (max flow point)
-        const capacityAnalysis = useMemo(() => {
-          if (!trafficData.length) return null;
-          let maxFlow = -Infinity;
-          let capPoint = trafficData[0];
-
-          for (const p of trafficData) {
-            if (p.flow > maxFlow) {
-              maxFlow = p.flow;
-              capPoint = p;
-            }
-          }
-
-          return {
-            capacity: Math.round(maxFlow),
-            criticalDensity: capPoint.density,
-            criticalSpeed: capPoint.speed,
-          };
-        }, [trafficData]);
-
-        // Sample flows to show LOS
-        const sampleFlows = [1200, 1800, 2400, 3000];
-
-        return (
-          <div className="min-h-screen">
-            <header className="bg-white border-b">
-              <div className="max-w-6xl mx-auto px-4 py-6">
-                <h1 className="text-3xl font-bold text-gray-900">Traffic Flow Analysis Dashboard</h1>
-                <p className="text-gray-600 mt-1">Interactive Transportation Engineering Analysis Tool</p>
-              </div>
-            </header>
-
-            <main className="max-w-6xl mx-auto px-4 py-6 space-y-6">
-              {/* Controls */}
-              <div className="bg-white rounded-2xl shadow p-5">
-                <div className="grid md:grid-cols-3 gap-6">
-                  <div>
-                    <label className="text-sm font-semibold text-gray-700">
-                      Free-Flow Speed (mph): <span className="font-bold">{freeFlowSpeed}</span>
-                    </label>
-                    <input
-                      type="range"
-                      min="45"
-                      max="75"
-                      value={freeFlowSpeed}
-                      onChange={(e) => setFreeFlowSpeed(Number(e.target.value))}
-                      className="w-full mt-2"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-sm font-semibold text-gray-700">
-                      Jam Density (veh/mi): <span className="font-bold">{jamDensity}</span>
-                    </label>
-                    <input
-                      type="range"
-                      min="100"
-                      max="250"
-                      value={jamDensity}
-                      onChange={(e) => setJamDensity(Number(e.target.value))}
-                      className="w-full mt-2"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">
-                      (Underwood uses k₀ = k<sub>j</sub>/2 → {Math.round(ko)} veh/mi)
-                    </p>
-                  </div>
-
-                  <div>
-                    <label className="text-sm font-semibold text-gray-700">Traffic Flow Model</label>
-                    <select
-                      value={selectedModel}
-                      onChange={(e) => setSelectedModel(e.target.value)}
-                      className="w-full mt-2 border rounded-lg p-2"
-                    >
-                      <option value="greenshields">Greenshields</option>
-                      <option value="greenberg">Greenberg</option>
-                      <option value="underwood">Underwood</option>
-                    </select>
-                    <p className="text-xs text-gray-500 mt-1">{activeModel.name}</p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Metrics */}
-              <div className="grid md:grid-cols-3 gap-4">
-                <div className="bg-white rounded-2xl shadow p-5">
-                  <p className="text-sm text-gray-500">Road Capacity</p>
-                  <p className="text-3xl font-bold">
-                    {capacityAnalysis ? capacityAnalysis.capacity.toLocaleString() : "—"}
-                  </p>
-                  <p className="text-sm text-gray-600">veh/hr</p>
-                </div>
-
-                <div className="bg-white rounded-2xl shadow p-5">
-                  <p className="text-sm text-gray-500">Critical Density</p>
-                  <p className="text-3xl font-bold">
-                    {capacityAnalysis ? capacityAnalysis.criticalDensity : "—"}
-                  </p>
-                  <p className="text-sm text-gray-600">veh/mi</p>
-                </div>
-
-                <div className="bg-white rounded-2xl shadow p-5">
-                  <p className="text-sm text-gray-500">Critical Speed</p>
-                  <p className="text-3xl font-bold">
-                    {capacityAnalysis ? capacityAnalysis.criticalSpeed : "—"}
-                  </p>
-                  <p className="text-sm text-gray-600">mph</p>
-                </div>
-              </div>
-
-              {/* Charts */}
-              <div className="grid lg:grid-cols-2 gap-6">
-                <div className="bg-white rounded-2xl shadow p-5">
-                  <h2 className="text-lg font-bold mb-3">Speed–Density</h2>
-                  <div className="h-72">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={trafficData}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="density" label={{ value: "Density (veh/mi)", position: "insideBottom", offset: -5 }} />
-                        <YAxis label={{ value: "Speed (mph)", angle: -90, position: "insideLeft" }} />
-                        <Tooltip />
-                        <Legend />
-                        <Line type="monotone" dataKey="speed" name="Speed (mph)" dot={false} />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-
-                <div className="bg-white rounded-2xl shadow p-5">
-                  <h2 className="text-lg font-bold mb-3">Flow–Density</h2>
-                  <div className="h-72">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={trafficData}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="density" label={{ value: "Density (veh/mi)", position: "insideBottom", offset: -5 }} />
-                        <YAxis label={{ value: "Flow (veh/hr)", angle: -90, position: "insideLeft" }} />
-                        <Tooltip />
-                        <Legend />
-                        <Line type="monotone" dataKey="flow" name="Flow (veh/hr)" dot={false} />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-white rounded-2xl shadow p-5">
-                <h2 className="text-lg font-bold mb-3">Speed–Flow</h2>
-                <div className="h-80">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={trafficData}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="flow" label={{ value: "Flow (veh/hr)", position: "insideBottom", offset: -5 }} />
-                      <YAxis label={{ value: "Speed (mph)", angle: -90, position: "insideLeft" }} />
-                      <Tooltip />
-                      <Legend />
-                      <Line type="monotone" dataKey="speed" name="Speed (mph)" dot={false} />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-
-              {/* LOS Table */}
-              <div className="bg-white rounded-2xl shadow p-5">
-                <h2 className="text-lg font-bold mb-4">Level of Service (LOS) — Sample Volumes</h2>
-
-                {!capacityAnalysis ? (
-                  <p className="text-gray-600">No capacity computed.</p>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full text-sm">
-                      <thead>
-                        <tr className="text-left border-b">
-                          <th className="py-2 pr-4">Volume (veh/hr)</th>
-                          <th className="py-2 pr-4">v/c</th>
-                          <th className="py-2 pr-4">LOS</th>
-                          <th className="py-2 pr-4">Description</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {sampleFlows.map((v) => {
-                          const ratio = v / capacityAnalysis.capacity;
-                          const los = getLOS(v, capacityAnalysis.capacity);
-                          return (
-                            <tr key={v} className="border-b">
-                              <td className="py-2 pr-4">{v.toLocaleString()}</td>
-                              <td className="py-2 pr-4">{ratio.toFixed(2)}</td>
-                              <td className="py-2 pr-4">
-                                <span className={`text-white px-2 py-1 rounded-md ${los.badge || "bg-gray-400"}`}>
-                                  {los.level}
-                                </span>
-                              </td>
-                              <td className="py-2 pr-4">{los.desc}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-
-              <footer className="text-center text-xs text-gray-500 pb-6">
-                Built by Ashish Basnet • M.S. Transportation Engineering
-              </footer>
-            </main>
-          </div>
+        const Activity = ({ size = 24, className = "" }) => (
+            <svg className={className} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+            </svg>
         );
-      }
 
-      // Mount app
-      const root = ReactDOM.createRoot(document.getElementById("root"));
-      root.render(<TrafficAnalysisDashboard />);
+        const BarChart3 = ({ size = 24 }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <line x1="18" y1="20" x2="18" y2="10"></line>
+                <line x1="12" y1="20" x2="12" y2="4"></line>
+                <line x1="6" y1="20" x2="6" y2="14"></line>
+            </svg>
+        );
+
+        const TrendingUp = ({ size = 24 }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline>
+                <polyline points="17 6 23 6 23 12"></polyline>
+            </svg>
+        );
+
+        const AlertCircle = ({ size = 24, className = "" }) => (
+            <svg className={className} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="8" x2="12" y2="12"></line>
+                <line x1="12" y1="16" x2="12.01" y2="16"></line>
+            </svg>
+        );
+
+        function TrafficAnalysisDashboard() {
+            const [freeFlowSpeed, setFreeFlowSpeed] = useState(65);
+            const [jamDensity, setJamDensity] = useState(180);
+            const [selectedModel, setSelectedModel] = useState('greenshields');
+
+            const models = {
+                greenshields: {
+                    name: "Greenshields Model",
+                    speed: (k, uf, kj) => uf * (1 - k / kj),
+                    flow: (k, uf, kj) => k * uf * (1 - k / kj)
+                },
+                greenberg: {
+                    name: "Greenberg Model",
+                    speed: (k, uf, kj) => uf * Math.log(kj / k),
+                    flow: (k, uf, kj) => k * uf * Math.log(kj / k)
+                },
+                underwood: {
+                    name: "Underwood Model",
+                    speed: (k, uf, kj) => uf * Math.exp(-k / (kj / 2)),
+                    flow: (k, uf, kj) => k * uf * Math.exp(-k / (kj / 2))
+                }
+            };
+
+            const trafficData = useMemo(() => {
+                const data = [];
+                const model = models[selectedModel];
+                const step = jamDensity / 100;
+                
+                for (let k = 1; k < jamDensity; k += step) {
+                    const speed = model.speed(k, freeFlowSpeed, jamDensity);
+                    const flow = model.flow(k, freeFlowSpeed, jamDensity);
+                    
+                    if (speed > 0 && flow > 0 && isFinite(speed) && isFinite(flow)) {
+                        data.push({
+                            density: Math.round(k * 10) / 10,
+                            speed: Math.round(speed * 10) / 10,
+                            flow: Math.round(flow * 10) / 10
+                        });
+                    }
+                }
+                return data;
+            }, [freeFlowSpeed, jamDensity, selectedModel]);
+
+            const capacityAnalysis = useMemo(() => {
+                if (trafficData.length === 0) return null;
+                
+                const maxFlow = Math.max(...trafficData.map(d => d.flow));
+                const capacityPoint = trafficData.find(d => d.flow === maxFlow);
+                
+                return {
+                    capacity: Math.round(maxFlow),
+                    criticalDensity: capacityPoint?.density || 0,
+                    criticalSpeed: capacityPoint?.speed || 0
+                };
+            }, [trafficData]);
+
+            const getLOS = (flow, capacity) => {
+                const ratio = flow / capacity;
+                if (ratio <= 0.35) return { level: 'A', color: 'bg-green-500', desc: 'Free Flow' };
+                if (ratio <= 0.54) return { level: 'B', color: 'bg-green-400', desc: 'Reasonably Free Flow' };
+                if (ratio <= 0.77) return { level: 'C', color: 'bg-yellow-400', desc: 'Stable Flow' };
+                if (ratio <= 0.93) return { level: 'D', color: 'bg-orange-400', desc: 'Approaching Unstable' };
+                if (ratio <= 1.0) return { level: 'E', color: 'bg-red-400', desc: 'Unstable Flow' };
+                return { level: 'F', color: 'bg-red-600', desc: 'Forced Flow' };
+            };
+
+            const sampleFlows = [1200, 1800, 2400, 3000];
+
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900 p-6">
+                    <div className="max-w-7xl mx-auto">
+                        <div className="text-center mb-8">
+                            <h1 className="text-4xl font-bold text-white mb-2 flex items-center justify-center gap-3">
+                                <Activity className="text-blue-400" size={40} />
+                                Traffic Flow Analysis Dashboard
+                            </h1>
+                            <p className="text-blue-200">Advanced Transportation Engineering Analysis Tool</p>
+                        </div>
+
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+                            <div className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20">
+                                <label className="block text-white font-semibold mb-2">
+                                    Free Flow Speed (mph)
+                                </label>
+                                <input
+                                    type="range"
+                                    min="45"
+                                    max="75"
+                                    value={freeFlowSpeed}
+                                    onChange={(e) => setFreeFlowSpeed(Number(e.target.value))}
+                                    className="w-full mb-2"
+                                />
+                                <div className="text-2xl font-bold text-blue-300">{freeFlowSpeed} mph</div>
+                            </div>
+
+                            <div className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20">
+                                <label className="block text-white font-semibold mb-2">
+                                    Jam Density (veh/mi)
+                                </label>
+                                <input
+                                    type="range"
+                                    min="100"
+                                    max="250"
+                                    value={jamDensity}
+                                    onChange={(e) => setJamDensity(Number(e.target.value))}
+                                    className="w-full mb-2"
+                                />
+                                <div className="text-2xl font-bold text-blue-300">{jamDensity} veh/mi</div>
+                            </div>
+
+                            <div className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20">
+                                <label className="block text-white font-semibold mb-2">
+                                    Traffic Flow Model
+                                </label>
+                                <select
+                                    value={selectedModel}
+                                    onChange={(e) => setSelectedModel(e.target.value)}
+                                    className="w-full bg-slate-800 text-white rounded-lg p-2 border border-blue-400"
+                                >
+                                    {Object.entries(models).map(([key, model]) => (
+                                        <option key={key} value={key}>{model.name}</option>
+                                    ))}
+                                </select>
+                            </div>
+                        </div>
+
+                        {capacityAnalysis && (
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+                                <div className="bg-gradient-to-br from-blue-500 to-blue-700 rounded-xl p-6 text-white">
+                                    <div className="flex items-center gap-3 mb-2">
+                                        <TrendingUp size={24} />
+                                        <h3 className="font-semibold">Road Capacity</h3>
+                                    </div>
+                                    <div className="text-3xl font-bold">{capacityAnalysis.capacity}</div>
+                                    <div className="text-sm opacity-90">vehicles/hour</div>
+                                </div>
+
+                                <div className="bg-gradient-to-br from-purple-500 to-purple-700 rounded-xl p-6 text-white">
+                                    <div className="flex items-center gap-3 mb-2">
+                                        <BarChart3 size={24} />
+                                        <h3 className="font-semibold">Critical Density</h3>
+                                    </div>
+                                    <div className="text-3xl font-bold">{capacityAnalysis.criticalDensity}</div>
+                                    <div className="text-sm opacity-90">veh/mi</div>
+                                </div>
+
+                                <div className="bg-gradient-to-br from-cyan-500 to-cyan-700 rounded-xl p-6 text-white">
+                                    <div className="flex items-center gap-3 mb-2">
+                                        <Activity size={24} />
+                                        <h3 className="font-semibold">Critical Speed</h3>
+                                    </div>
+                                    <div className="text-3xl font-bold">{capacityAnalysis.criticalSpeed}</div>
+                                    <div className="text-sm opacity-90">mph</div>
+                                </div>
+                            </div>
+                        )}
+
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+                            <div className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20">
+                                <h2 className="text-xl font-bold text-white mb-4">Speed-Density Relationship</h2>
+                                <ResponsiveContainer width="100%" height={300}>
+                                    <LineChart data={trafficData}>
+                                        <CartesianGrid strokeDasharray="3 3" stroke="#ffffff30" />
+                                        <XAxis 
+                                            dataKey="density" 
+                                            stroke="#fff"
+                                            label={{ value: 'Density (veh/mi)', position: 'insideBottom', offset: -5, fill: '#fff' }}
+                                        />
+                                        <YAxis 
+                                            stroke="#fff"
+                                            label={{ value: 'Speed (mph)', angle: -90, position: 'insideLeft', fill: '#fff' }}
+                                        />
+                                        <Tooltip 
+                                            contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #3b82f6' }}
+                                            labelStyle={{ color: '#fff' }}
+                                        />
+                                        <Line type="monotone" dataKey="speed" stroke="#3b82f6" strokeWidth={3} dot={false} />
+                                    </LineChart>
+                                </ResponsiveContainer>
+                            </div>
+
+                            <div className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20">
+                                <h2 className="text-xl font-bold text-white mb-4">Flow-Density Relationship</h2>
+                                <ResponsiveContainer width="100%" height={300}>
+                                    <LineChart data={trafficData}>
+                                        <CartesianGrid strokeDasharray="3 3" stroke="#ffffff30" />
+                                        <XAxis 
+                                            dataKey="density" 
+                                            stroke="#fff"
+                                            label={{ value: 'Density (veh/mi)', position: 'insideBottom', offset: -5, fill: '#fff' }}
+                                        />
+                                        <YAxis 
+                                            stroke="#fff"
+                                            label={{ value: 'Flow (veh/hr)', angle: -90, position: 'insideLeft', fill: '#fff' }}
+                                        />
+                                        <Tooltip 
+                                            contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #10b981' }}
+                                            labelStyle={{ color: '#fff' }}
+                                        />
+                                        <Line type="monotone" dataKey="flow" stroke="#10b981" strokeWidth={3} dot={false} />
+                                    </LineChart>
+                                </ResponsiveContainer>
+                            </div>
+                        </div>
+
+                        <div className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20 mb-6">
+                            <h2 className="text-xl font-bold text-white mb-4">Speed-Flow Relationship</h2>
+                            <ResponsiveContainer width="100%" height={300}>
+                                <ScatterChart>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#ffffff30" />
+                                    <XAxis 
+                                        dataKey="flow" 
+                                        type="number"
+                                        stroke="#fff"
+                                        label={{ value: 'Flow (veh/hr)', position: 'insideBottom', offset: -5, fill: '#fff' }}
+                                    />
+                                    <YAxis 
+                                        dataKey="speed"
+                                        stroke="#fff"
+                                        label={{ value: 'Speed (mph)', angle: -90, position: 'insideLeft', fill: '#fff' }}
+                                    />
+                                    <Tooltip 
+                                        contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #f59e0b' }}
+                                        labelStyle={{ color: '#fff' }}
+                                    />
+                                    <Scatter data={trafficData} fill="#f59e0b" />
+                                </ScatterChart>
+                            </ResponsiveContainer>
+                        </div>
+
+                        {capacityAnalysis && (
+                            <div className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20">
+                                <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
+                                    <AlertCircle className="text-yellow-400" />
+                                    Level of Service (LOS) Analysis
+                                </h2>
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                    {sampleFlows.map(flow => {
+                                        const los = getLOS(flow, capacityAnalysis.capacity);
+                                        return (
+                                            <div key={flow} className="bg-slate-800 rounded-lg p-4 border border-white/20">
+                                                <div className="text-sm text-gray-300 mb-2">Flow: {flow} veh/hr</div>
+                                                <div className={`${los.color} rounded-lg p-3 text-center`}>
+                                                    <div className="text-3xl font-bold text-white">LOS {los.level}</div>
+                                                    <div className="text-xs text-white/90 mt-1">{los.desc}</div>
+                                                </div>
+                                                <div className="text-xs text-gray-400 mt-2 text-center">
+                                                    v/c = {(flow / capacityAnalysis.capacity).toFixed(2)}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
+
+                        <div className="mt-6 bg-white/5 backdrop-blur-lg rounded-xl p-4 border border-white/10">
+                            <p className="text-sm text-gray-300 text-center">
+                                Developed by [Your Name] | Transportation Engineering Graduate Student | [University Name]
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<TrafficAnalysisDashboard />);
     </script>
-  </body>
+</body>
 </html>
