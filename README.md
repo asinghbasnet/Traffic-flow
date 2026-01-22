@@ -72,7 +72,7 @@ Where:
 ## 🚀 Getting Started
 
 ### Option 1: View Online (Easiest)
-Simply visit the 
+Simply visit the website published
 
 ### Option 2: Run Locally
 1. Download `index.html` from this repository
